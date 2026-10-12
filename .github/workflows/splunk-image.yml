@@ -1,0 +1,96 @@
+name: Splunk image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'splunk/**'
+      - '.github/workflows/splunk-image.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE: ${{ vars.SPLUNK_IMAGE }}
+  PACKAGE: ${{ vars.SPLUNK_PACKAGE }}
+  TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  build:
+    name: Build, verify, and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    # digestは不合格時の削除対象の特定、refは承認後のイメージ指定に使用。
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      ref: ${{ steps.push.outputs.ref }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "io.github.candidate-run=$TAG" \
+            -t "$IMAGE:$TAG" ./splunk
+
+      - name: Python version,pip list
+        run: |
+          docker run --rm --entrypoint /bin/sh "$IMAGE:$TAG" -c \
+            '/usr/bin/python3.14 --version && /usr/bin/python3.14 -m pip list'
+
+      - name: login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image and record digest
+        id: push
+        run: |
+          docker push "$IMAGE:$TAG"
+          ref=$(docker image inspect "$IMAGE:$TAG" --format '{{json .RepoDigests}}' | jq -r '.[0]')
+          digest="${ref#*@}"
+          [[ "$ref" == "$IMAGE@"* && "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+  review:
+    name: Manual verification and approval
+    needs: build
+    runs-on: ubuntu-latest
+    environment: splunk-image-review
+    steps:
+      - name: Record approved image
+        env:
+          REF: ${{ needs.build.outputs.ref }}
+        run: |
+          printf '### 承認済み\nComposeで指定するイメージ: `%s`\n' "$REF" >> "$GITHUB_STEP_SUMMARY"
+
+  delete_rejected:
+    name: Delete rejected image
+    needs: [build, review]
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' && needs.review.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete current candidate only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          api="/users/$OWNER/packages/container/$PACKAGE/versions"
+          id=$(gh api --paginate "$api?per_page=100" \
+            --jq ".[] | select(.name == \"$DIGEST\" and .metadata.container.tags == [\"$TAG\"]) | .id")
+
+          # IDが1件の数値の場合だけ削除する。
+          [[ "$id" =~ ^[0-9]+$ ]]
+          gh api --method DELETE "$api/$id"
