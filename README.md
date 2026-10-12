@@ -2,7 +2,7 @@
 
 ## 概要
 
-前回作成したSplunk検証用イメージには以下の課題がある。
+[前回作成](https://github.com/yj-platform-lab/splunk-app-dev-environment/blob/main/README.md)したSplunk検証用イメージには以下の課題がある。
 
 - 不要なファイルが残っており、イメージサイズに削減の余地がある
 - SplunkとMySQLが同居しており、個別の起動・停止や更新が難しい
