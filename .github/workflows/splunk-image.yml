@@ -87,7 +87,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           DIGEST: ${{ needs.build.outputs.digest }}
         run: |
-          api="/users/$OWNER/packages/container/$PACKAGE/versions"
+          api="/orgs/$OWNER/packages/container/$PACKAGE/versions"
           id=$(gh api --paginate "$api?per_page=100" \
             --jq ".[] | select(.name == \"$DIGEST\" and .metadata.container.tags == [\"$TAG\"]) | .id")
 
